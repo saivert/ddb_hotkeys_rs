@@ -95,6 +95,7 @@ impl DeadBeef {
         let log_detailed = deadbeef.get().log_detailed.unwrap();
         let msg = LossyCString::new(msg);
         unsafe {
+            // Using transmute here to squash clippy warning about variadic function.
             let log_detailed_fn: extern "C" fn(*mut DB_plugin_t, u32, *const i8) =
                 std::mem::transmute(log_detailed);
             log_detailed_fn(
@@ -105,11 +106,11 @@ impl DeadBeef {
         }
     }
 
-    pub fn conf_get_str(item: impl Into<String>, default: impl Into<String>) -> String {
+    pub fn conf_get_str(item: impl AsRef<str>, default: impl AsRef<str>) -> String {
         let deadbeef = unsafe { DeadBeef::deadbeef() };
 
-        let item = LossyCString::new(item.into());
-        let default = LossyCString::new(default.into());
+        let item = LossyCString::new(item);
+        let default = LossyCString::new(default);
         let conf_get_str = deadbeef.get().conf_get_str.unwrap();
         let mut buf: Vec<u8> = vec![0; 4096];
 
@@ -117,7 +118,7 @@ impl DeadBeef {
             conf_get_str(
                 item.as_ptr(),
                 default.as_ptr(),
-                buf.as_mut_ptr() as *mut i8,
+                buf.as_mut_ptr() as *mut std::ffi::c_char,
                 4096,
             );
         }
@@ -126,7 +127,7 @@ impl DeadBeef {
         return cstr
             .expect("null terminated string")
             .to_string_lossy()
-            .to_string();
+            .into_owned();
     }
 
     pub fn volume_set_amp(vol: f32) {
@@ -155,18 +156,18 @@ impl DeadBeef {
         PlItem::from_raw(it)
     }
 
-    pub fn titleformat(format: impl Into<String>) -> Result<String, DB_TF_Error> {
+    pub fn titleformat(format: impl AsRef<str>) -> Result<String, DB_TF_Error> {
         let track = Self::current_track()?;
         Self::titleformat_for_item(format, &track)
     }
 
     pub fn titleformat_for_item(
-        format: impl Into<String>,
+        format: impl AsRef<str>,
         item: &PlItem,
     ) -> Result<String, DB_TF_Error> {
         let deadbeef = unsafe { DeadBeef::deadbeef() };
 
-        let format = LossyCString::new(format.into());
+        let format = LossyCString::new(format);
 
         let tf_compile = deadbeef.get().tf_compile.unwrap();
         let tf_eval = deadbeef.get().tf_eval.unwrap();

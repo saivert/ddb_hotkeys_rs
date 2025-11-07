@@ -1,6 +1,6 @@
 use std::ffi::CStr;
 
-use crate::{DB_plugin_action_t, DB_plugin_t, ddb_action_context_e};
+use crate::{ddb_action_context_e, DB_plugin_action_t, DB_plugin_t};
 
 pub struct Plugin {
     ptr: *mut DB_plugin_t,
@@ -67,12 +67,13 @@ impl Plugin {
 
     pub fn actions(&self) -> ActionIter {
         unsafe {
-            // let get_actions = (*self.ptr).get_actions;
             if let Some(get_actions) = (*self.ptr).get_actions {
                 let first = get_actions(std::ptr::null_mut());
                 ActionIter { current: first }
             } else {
-                ActionIter { current: std::ptr::null_mut() }
+                ActionIter {
+                    current: std::ptr::null_mut(),
+                }
             }
         }
     }
@@ -104,8 +105,8 @@ impl Action {
     }
 
     pub fn call(&self, context: ddb_action_context_e) {
-        if let Some(callback2) = unsafe { (*self.ptr).callback2 } {
-            unsafe {
+        unsafe {
+            if let Some(callback2) = (*self.ptr).callback2 {
                 callback2(self.ptr, context);
             }
         }
