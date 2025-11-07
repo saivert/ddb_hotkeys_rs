@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cargo",
+			"command": "build",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"label": "rust: cargo build"
+		},
+		{
+			"type": "shell",
+			"command": "cp ${workspaceFolder}/target/debug/libdeadbeef_hotkeys_rust.so ~/.local/lib64/deadbeef/deadbeef_hotkeys_rust.so",
+			"label": "deploy"
+		},
+		{
+			"label": "build and deploy",
+			"dependsOn": [
+				"rust: cargo build",
+				"deploy"
+			],
+			"dependsOrder": "sequence",
+			"problemMatcher": "$rustc",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+		}
+	]
+}

@@ -1,0 +1,29 @@
+[package]
+name = "deadbeef-hotkeys-rust"
+description = "Hotkeys plugin for DeadBeef"
+keywords = ["ffi", "deadbeef", "multimedia", "audio"]
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+categories.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+homepage.workspace = true
+
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ashpd = {version = "0.11.0", default-features = false, features = ["async-std"]}
+deadbeef-sys = {path = "../deadbeef-sys"}
+lossycstring = {path = "../lossycstring"}
+once_cell = "1.18.0"
+smol = { version = "2.0.2"}
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", default-features = false, features = ["fmt"]}
+async-lock = "3.4.1"
+async-executor = "1.13.3"
