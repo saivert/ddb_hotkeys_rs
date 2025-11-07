@@ -11,7 +11,6 @@ use std::ptr::{self};
 use thiserror::Error;
 
 static mut DEADBEEF: Option<DeadBeef> = None;
-static mut DEADBEEF_THREAD_ID: Option<std::thread::ThreadId> = None;
 
 #[allow(deref_nullptr)]
 mod api {
@@ -62,7 +61,6 @@ impl DeadBeef {
             ptr: api,
             plugin_ptr: ptr as *mut DB_plugin_t,
         });
-        DEADBEEF_THREAD_ID = Some(std::thread::current().id());
 
         ptr
     }

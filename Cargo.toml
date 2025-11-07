@@ -13,7 +13,7 @@ edition = "2021"
 homepage = "https://saivert.com"
 license = "MIT"
 repository = "https://github.com/saivert/ddb_hotkeys_rs"
-rust-version = "1.77"
+rust-version = "1.81"
 version = "0.0.1"
 
 
