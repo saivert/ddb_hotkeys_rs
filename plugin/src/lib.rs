@@ -28,7 +28,7 @@ static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
                 website: c"https://saivert.com".as_ptr(),
                 start: Some(plugin_start),
                 stop: Some(plugin_stop),
-                message: Some(message),
+                message: None,
                 connect: None,
                 get_actions: None,
                 exec_cmdline: None,
@@ -68,18 +68,17 @@ extern "C" fn plugin_start() -> c_int {
 
 extern "C" fn plugin_stop() -> c_int {
     if let Ok(p) = &mut PLUGIN.lock() {
-        tracing::info!("[Global Shortcuts] Acquired lock on PLUGIN global");
         p.plugin_stop();
     }
     0
 }
 
-extern "C" fn message(msgid: u32, ctx: usize, p1: u32, p2: u32) -> c_int {
-    if let Ok(p) = PLUGIN.lock() {
-        p.message(msgid, ctx, p1, p2);
-    }
-    0
-}
+// extern "C" fn message(msgid: u32, ctx: usize, p1: u32, p2: u32) -> c_int {
+//     if let Ok(p) = PLUGIN.lock() {
+//         p.message(msgid, ctx, p1, p2);
+//     }
+//     0
+// }
 
 #[no_mangle]
 ///

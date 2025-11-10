@@ -8,25 +8,23 @@ use ashpd::desktop::{
 use async_lock::Mutex;
 use futures_util::{
     future::{AbortHandle, Abortable},
-    stream::{select_all, Stream, StreamExt},
+    stream::{select_all, AbortRegistration, Stream, StreamExt},
 };
-use smol::block_on;
-
+use smol::channel;
 use std::{collections::HashSet, str::FromStr, sync::Arc, thread};
 
 pub struct MiscPlugin {
     plugin: DB_hotkeys_plugin_t,
-
     thread: Option<PluginThread>,
-
     shortcut_handler: Arc<Mutex<ShortcutHandler>>,
+    abort_handle: Arc<Mutex<Option<AbortHandle>>>,
 }
 
 unsafe impl Send for MiscPlugin {}
 
 struct PluginThread {
     handle: thread::JoinHandle<()>,
-    sender: smol::channel::Sender<ThreadMessage>,
+    sender: channel::Sender<ThreadMessage>,
 }
 
 #[derive(Debug)]
@@ -37,7 +35,7 @@ enum ThreadMessage {
 
 impl PluginThread {
     pub fn new(plugin: Arc<Mutex<ShortcutHandler>>) -> Self {
-        let (sender, receiver) = smol::channel::unbounded::<ThreadMessage>();
+        let (sender, receiver) = channel::bounded::<ThreadMessage>(10);
         Self {
             handle: thread::spawn(move || thread_main(receiver, plugin)),
             sender,
@@ -51,7 +49,7 @@ impl PluginThread {
 
     pub fn msg(&self, msg: ThreadMessage) {
         self.sender
-            .send_blocking(msg)
+            .try_send(msg)
             .expect("Unable to send message to thread!");
     }
 }
@@ -77,10 +75,13 @@ enum Event {
 
 impl MiscPlugin {
     pub fn new(plugin: DB_hotkeys_plugin_t) -> Self {
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+
         Self {
             plugin,
             thread: None,
-            shortcut_handler: Arc::new(Mutex::new(ShortcutHandler::new())),
+            shortcut_handler: Arc::new(Mutex::new(ShortcutHandler::new(abort_registration))),
+            abort_handle: Arc::new(Mutex::new(Some(abort_handle))),
         }
     }
 
@@ -93,6 +94,12 @@ impl MiscPlugin {
     }
 
     pub fn plugin_stop(&mut self) {
+        self.abort_handle
+            .lock_blocking()
+            .take()
+            .expect("Abort handle")
+            .abort();
+
         if let Some(s) = self.thread.as_ref() {
             tracing::info!("[Global Shortcuts] Sending Terminate to thread.");
             s.msg(ThreadMessage::Terminate);
@@ -111,28 +118,27 @@ impl MiscPlugin {
         }
     }
 
-    #[allow(unused)]
-    pub fn message(&self, msgid: u32, ctx: usize, p1: u32, p2: u32) {
-        match msgid {
-            _ => {}
-        }
-    }
+    // #[allow(unused)]
+    // pub fn message(&self, msgid: u32, ctx: usize, p1: u32, p2: u32) {
+    //     match msgid {
+    //         _ => {}
+    //     }
+    // }
 }
 
 struct ShortcutHandler {
-    pub rebind_count: Arc<Mutex<u32>>,
     pub session: Arc<Mutex<Option<Session<'static, GlobalShortcuts<'static>>>>>,
-    pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    // pub abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    pub abort_registration: std::cell::Cell<Option<AbortRegistration>>,
     pub triggers: Arc<Mutex<Vec<RegisteredShortcut>>>,
     pub activations: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ShortcutHandler {
-    pub fn new() -> Self {
+    pub fn new(abort_registration: AbortRegistration) -> Self {
         Self {
-            rebind_count: Default::default(),
             session: Default::default(),
-            abort_handle: Default::default(),
+            abort_registration: std::cell::Cell::new(Some(abort_registration)),
             triggers: Default::default(),
             activations: Default::default(),
         }
@@ -143,8 +149,8 @@ impl ShortcutHandler {
         let shortcuts: Option<Vec<_>> = Some(vec![
             // Example shortcut
             NewShortcut::new("playpause", "Play/Pause").preferred_trigger("Ctrl+Alt+H"),
-            NewShortcut::new("next", "Next song").preferred_trigger("Ctrl+Alt+H"),
-            NewShortcut::new("prev", "Previous song").preferred_trigger("Ctrl+Alt+H"),
+            NewShortcut::new("next", "Next song").preferred_trigger("Ctrl+Alt+."),
+            NewShortcut::new("prev", "Previous song").preferred_trigger("Ctrl+Alt+,"),
         ]);
 
         // Set Application id
@@ -182,24 +188,23 @@ impl ShortcutHandler {
                             })
                             .collect();
                         *self.triggers.lock().await = triggers;
-                        self.display_activations().await;
-                        self.set_rebind_count(Some(0));
                         self.session.lock().await.replace(session);
                         loop {
                             if self.session.lock().await.is_none() {
                                 break;
                             }
 
-                            let (abort_handle, abort_registration) = AbortHandle::new_pair();
-                            let global_shortcuts_arc = Arc::new(&global_shortcuts);
-                            let global_shortcuts_clone = global_shortcuts_arc.clone();
-                            let future = Abortable::new(
-                                self.track_incoming_events(&global_shortcuts_clone),
-                                abort_registration,
-                            );
-                            self.abort_handle.lock().await.replace(abort_handle);
-                            tracing::info!("[Global Shortcuts] Awaiting track_incoming_events");
-                            let _ = future.await;
+                            if let Some(ar) = self.abort_registration.take() {
+                                let future = Abortable::new(
+                                    self.track_incoming_events(&global_shortcuts),
+                                    ar,
+                                );
+                                //self.abort_handle.lock().await.replace(abort_handle);
+                                tracing::info!("[Global Shortcuts] Awaiting track_incoming_events");
+                                let _ = future.await;
+                            } else {
+                                break;
+                            }
                         }
                     }
                     Err(e) => {
@@ -213,13 +218,6 @@ impl ShortcutHandler {
         };
         tracing::info!("[Global Shortcuts] End of start session");
         Ok(())
-    }
-
-    fn set_rebind_count(&self, count: Option<u32>) {
-        match count {
-            None => {}
-            Some(count) => DeadBeef::log_detailed(DDB_LOG_LAYER_INFO, &format!("{}", count)),
-        }
     }
 
     async fn track_incoming_events(&self, global_shortcuts: &GlobalShortcuts<'_>) {
@@ -261,15 +259,16 @@ impl ShortcutHandler {
     }
 
     async fn stop(&self) {
-        if let Some(abort_handle) = self.abort_handle.lock().await.take() {
-            tracing::info!("[Global Shortcuts] Aborting");
-            abort_handle.abort();
-        }
+        tracing::info!("[Global Shortcuts] Aborting");
+
+        // if let Some(abort_handle) = self.abort_handle.lock().await.take() {
+        //     tracing::info!("[Global Shortcuts] Aborting");
+        //     abort_handle.abort();
+        // }
 
         if let Some(session) = self.session.lock().await.take() {
             let _ = session.close().await;
         }
-        self.set_rebind_count(None);
         self.activations.lock().await.clear();
         self.triggers.lock().await.clear();
     }
@@ -330,17 +329,13 @@ impl ShortcutHandler {
                 activation: s.trigger_description().to_owned(),
             })
             .collect();
-        *self.rebind_count.lock().await += 1;
-        self.set_rebind_count(Some(*self.rebind_count.lock().await));
+
         self.display_activations().await
     }
 }
 
-fn thread_main(
-    receiver: smol::channel::Receiver<ThreadMessage>,
-    plugin: Arc<Mutex<ShortcutHandler>>,
-) {
-    block_on(async {
+fn thread_main(receiver: channel::Receiver<ThreadMessage>, plugin: Arc<Mutex<ShortcutHandler>>) {
+    smol::block_on(async {
         while let Ok(msg) = receiver.recv().await {
             match msg {
                 ThreadMessage::Terminate => {
