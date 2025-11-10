@@ -22,7 +22,7 @@ static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
                 flags: DDB_PLUGIN_FLAG_LOGGING,
                 type_: DB_PLUGIN_MISC as i32,
                 id: c"hotkeys_rs".as_ptr(),
-                name: c"Hotkeys plugin using portal (rust)".as_ptr(),
+                name: c"Hotkeys plugin using portal".as_ptr(),
                 descr: c"This is a new hotkeys plugin that uses XDG Portal for Global shortcut to support wayland".as_ptr(),
                 copyright: concat!(include_str!("../../LICENSE"), "\0").as_ptr() as *const i8,
                 website: c"https://saivert.com".as_ptr(),
