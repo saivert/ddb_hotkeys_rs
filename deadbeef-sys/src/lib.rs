@@ -18,9 +18,10 @@ mod api {
 }
 pub use api::*;
 
+pub mod conf_item;
 pub mod plugin;
 
-use crate::plugin::PluginIter;
+use crate::{conf_item::DBConfigurationItemIter, plugin::PluginIter};
 
 /// Main DeadBeef struct that encapsulates common DeadBeef API functions.
 pub struct DeadBeef {
@@ -227,6 +228,21 @@ impl DeadBeef {
         if let Some(action) = Self::find_action_by_name(name) {
             action.call(DDB_ACTION_CTX_MAIN);
         }
+    }
+
+    pub fn conf_find_str(key: impl AsRef<str>) -> Option<DBConfigurationItemIter> {
+        let deadbeef = unsafe { DeadBeef::deadbeef() };
+        let conf_find = deadbeef.get().conf_find.unwrap();
+        let key = LossyCString::new(key);
+        let list = unsafe { conf_find(key.as_ptr(), std::ptr::null_mut()) };
+        if list.is_null() {
+            return None;
+        }
+        Some(DBConfigurationItemIter {
+            current: list,
+            key,
+            conf_find,
+        })
     }
 }
 

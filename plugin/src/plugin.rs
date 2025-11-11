@@ -86,7 +86,7 @@ impl MiscPlugin {
     }
 
     pub fn plugin_start(&mut self) {
-        tracing::info!("[Global Shortcuts] plugin start");
+        tracing::debug!("plugin start");
         self.thread = Some(PluginThread::new(self.shortcut_handler.clone()));
         if let Some(s) = self.thread.as_ref() {
             s.msg(ThreadMessage::Start);
@@ -101,7 +101,7 @@ impl MiscPlugin {
             .abort();
 
         if let Some(s) = self.thread.as_ref() {
-            tracing::info!("[Global Shortcuts] Sending Terminate to thread.");
+            tracing::debug!("Sending Terminate to thread.");
             s.msg(ThreadMessage::Terminate);
         }
 
@@ -109,10 +109,7 @@ impl MiscPlugin {
             match t.join() {
                 Ok(_) => (),
                 Err(_) => {
-                    DeadBeef::log_detailed(
-                        DDB_LOG_LAYER_INFO,
-                        "[Global Shortcuts] Playback thread lingering!\n",
-                    );
+                    DeadBeef::log_detailed(DDB_LOG_LAYER_INFO, "Playback thread lingering!\n");
                 }
             }
         }
@@ -145,13 +142,48 @@ impl ShortcutHandler {
     }
 
     async fn start_session(&self) -> ashpd::Result<()> {
-        //let hotkeysconfig = DeadBeef::conf_get_str("hotkey", "");
-        let shortcuts: Option<Vec<_>> = Some(vec![
-            // Example shortcut
-            NewShortcut::new("playpause", "Play/Pause").preferred_trigger("Ctrl+Alt+H"),
-            NewShortcut::new("next", "Next song").preferred_trigger("Ctrl+Alt+."),
-            NewShortcut::new("prev", "Previous song").preferred_trigger("Ctrl+Alt+,"),
-        ]);
+        // Collect shortcuts from configuration entries `hotkey.*`.
+        // Each value should parse as: `"<keystroke>" <num1> <num2> <action name...>`
+        let mut collected: Vec<_> = Vec::new();
+        for a in DeadBeef::conf_find_str("hotkey.").into_iter().flatten() {
+            if let Some(value) = a.value() {
+                match parse_line(value) {
+                    Ok((keystroke, global, action_name)) => {
+                        if !global {
+                            // skip non-global bindings for portal registration
+                            continue;
+                        }
+
+                        // Use the action title if available, otherwise fall back to the action name
+
+                        let raw_title = DeadBeef::
+                            find_action_by_name(&action_name)
+                            .and_then(|act| act.title().map(|s| s.to_string()))
+                            .unwrap_or_else(|| action_name.clone());
+
+                        let title_segment = last_segment_after_unescaped_slash(&raw_title);
+
+                        // Convert escaped forward slashes ("\/" -> "/") in the final segment
+                        let title = title_segment.replace("\\/", "/");
+
+                        tracing::debug!("{keystroke} = {}", title);
+
+                        collected.push(
+                            NewShortcut::new(action_name.as_str(), title.as_str())
+                                .preferred_trigger(keystroke.as_str()),
+                        );
+                    }
+                    Err(msg) => tracing::error!("Unable to parse hotkey config item: {msg}"),
+                }
+            }
+        }
+
+        // Use only collected shortcuts from config; if none, don't register any shortcuts
+        let shortcuts: Option<Vec<_>> = if collected.is_empty() {
+            None
+        } else {
+            Some(collected)
+        };
 
         // Set Application id
         let appid = ashpd::AppID::from_str(&"music.deadbeef.player")?;
@@ -168,10 +200,10 @@ impl ShortcutHandler {
                 if let Err(e) = &response {
                     match e {
                         ashpd::Error::Response(ResponseError::Cancelled) => {
-                            tracing::error!("[Global Shortcuts] Cancelled\n");
+                            tracing::error!("Cancelled\n");
                         }
                         ashpd::Error::Response(ResponseError::Other) => {
-                            tracing::error!("[Global Shortcuts] Other response error\n");
+                            tracing::error!("Other response error\n");
                         }
                         other => tracing::error!("{}", other),
                     }
@@ -200,7 +232,7 @@ impl ShortcutHandler {
                                     ar,
                                 );
                                 //self.abort_handle.lock().await.replace(abort_handle);
-                                tracing::info!("[Global Shortcuts] Awaiting track_incoming_events");
+                                tracing::debug!("Awaiting track_incoming_events");
                                 let _ = future.await;
                             } else {
                                 break;
@@ -208,15 +240,15 @@ impl ShortcutHandler {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("[Global Shortcuts] Failure {:?}\n", e);
+                        tracing::error!("Failure {:?}\n", e);
                     }
                 }
             }
             _ => {
-                tracing::error!("[Global Shortcuts] Shortcut list invalid\n");
+                tracing::error!("Shortcut list invalid\n");
             }
         };
-        tracing::info!("[Global Shortcuts] End of start session");
+        tracing::debug!("End of start session");
         Ok(())
     }
 
@@ -240,10 +272,10 @@ impl ShortcutHandler {
 
         let mut events = select_all([bact, bdeact, bchg]);
 
-        tracing::info!("[Global Shortcuts] Starting to wait for events");
+        tracing::debug!("Starting to wait for events");
 
         while let Some(event) = events.next().await {
-            tracing::info!("[Global Shortcuts] Got new event from stream");
+            tracing::debug!("Got new event from stream");
             match event {
                 Event::Activated(activation) => {
                     self.on_activated(activation).await;
@@ -259,10 +291,10 @@ impl ShortcutHandler {
     }
 
     async fn stop(&self) {
-        tracing::info!("[Global Shortcuts] Aborting");
+        tracing::debug!("Aborting");
 
         // if let Some(abort_handle) = self.abort_handle.lock().await.take() {
-        //     tracing::info!("[Global Shortcuts] Aborting");
+        //     tracing::debug!("Aborting");
         //     abort_handle.abort();
         // }
 
@@ -289,20 +321,14 @@ impl ShortcutHandler {
                 }
             })
             .collect();
-        tracing::info!("Active Shortcuts:\n{}\n", text.join("\n"));
+        tracing::debug!("Active Shortcuts:\n{}\n", text.join("\n"));
     }
 
     async fn on_activated(&self, activation: Activated) {
         {
             let mut activations = self.activations.lock().await;
             activations.insert(activation.shortcut_id().into());
-
-            match activation.shortcut_id() {
-                "playpause" => DeadBeef::call_action_by_name("play_pause"),
-                "next" => DeadBeef::call_action_by_name("next"),
-                "prev" => DeadBeef::call_action_by_name("prev"),
-                _ => {}
-            }
+            DeadBeef::call_action_by_name(activation.shortcut_id());
         }
 
         self.display_activations().await
@@ -312,7 +338,7 @@ impl ShortcutHandler {
         {
             let mut activations = self.activations.lock().await;
             if !activations.remove(deactivation.shortcut_id()) {
-                tracing::error!(
+                tracing::debug!(
                     "Received deactivation without previous activation: {deactivation:?}"
                 );
             }
@@ -339,18 +365,110 @@ fn thread_main(receiver: channel::Receiver<ThreadMessage>, plugin: Arc<Mutex<Sho
         while let Ok(msg) = receiver.recv().await {
             match msg {
                 ThreadMessage::Terminate => {
-                    tracing::info!("[Global Shortcuts] Plugin thread terminating...");
+                    tracing::debug!("Plugin thread terminating...");
                     plugin.lock().await.stop().await;
                 }
                 ThreadMessage::Start => {
-                    tracing::info!("[Global Shortcuts] Plugin thread received Start message");
-                    if plugin.lock().await.start_session().await.is_ok() {
-                        tracing::info!("[Global Shortcuts] Plugin session started successfully");
-                    } else {
-                        tracing::info!("[Global Shortcuts] Plugin session failed to start");
+                    tracing::debug!("Plugin thread received Start message");
+                    if !plugin.lock().await.start_session().await.is_ok() {
+                        tracing::debug!("Plugin session failed to start");
                     }
                 }
             }
         }
     });
+}
+
+/// Parse lines like: `"Ctrl k" 0 0 toggle_stop_after_album`
+///
+/// Returns (keystroke, is_global, action_name)
+pub fn parse_line(line: &str) -> Result<(String, bool, String), String> {
+    let s = line.trim();
+    let rest = s
+        .strip_prefix('"')
+        .ok_or_else(|| "line must start with a double quote for keystroke".to_string())?;
+
+    let end_quote_idx = rest
+        .find('"')
+        .ok_or_else(|| "missing closing quote for keystroke".to_string())?;
+    let keystroke = &rest[..end_quote_idx];
+
+    let after = rest[end_quote_idx + 1..].trim();
+    let mut parts = after.split_whitespace();
+
+    // ignore first number
+    let _ = parts
+        .next()
+        .ok_or_else(|| "missing first number".to_string())?;
+
+    // second number -> is_global
+    let num2 = parts
+        .next()
+        .ok_or_else(|| "missing second number".to_string())?;
+    let is_global = match num2.parse::<i64>() {
+        Ok(n) => n != 0,
+        Err(_) => return Err("second number is not a valid integer".to_string()),
+    };
+
+    let action_tokens: Vec<&str> = parts.collect();
+    if action_tokens.is_empty() {
+        return Err("missing action name".to_string());
+    }
+    let action_name = action_tokens.join(" ");
+
+    Ok((keystroke.to_string(), is_global, action_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_line;
+
+    #[test]
+    fn parses_example_not_global() {
+        let line = "\"Ctrl k\" 0 0 toggle_stop_after_album";
+        let (keystroke, is_global, action) = parse_line(line).expect("parse failed");
+        assert_eq!(keystroke, "Ctrl k");
+        assert_eq!(is_global, false);
+        assert_eq!(action, "toggle_stop_after_album");
+    }
+
+    #[test]
+    fn parses_example_global_and_action_with_spaces() {
+        let line = "\"Alt+X\" 123 1 do something now";
+        let (keystroke, is_global, action) = parse_line(line).expect("parse failed");
+        assert_eq!(keystroke, "Alt+X");
+        assert_eq!(is_global, true);
+        assert_eq!(action, "do something now");
+    }
+
+    #[test]
+    fn errors_when_missing_quote() {
+        let line = "Ctrl k\" 0 0 action";
+        assert!(parse_line(line).is_err());
+    }
+}
+
+fn last_segment_after_unescaped_slash(s: &str) -> &str {
+    let ci: Vec<(usize, char)> = s.char_indices().collect();
+    // walk backward over the char-index pairs
+    for i in (0..ci.len()).rev() {
+        let (idx, ch) = ci[i];
+        if ch != '/' {
+            continue;
+        }
+        // if there's a char before this slash, check if it is a backslash
+        if i == 0 {
+            // slash at start -> nothing before it, so take everything after
+            return &s[idx + ch.len_utf8()..];
+        }
+        let (_prev_idx, prev_ch) = ci[i - 1];
+        if prev_ch == '\\' {
+            // escaped slash -> skip it
+            continue;
+        }
+        // found an unescaped '/'
+        return &s[idx + ch.len_utf8()..];
+    }
+    // no unescaped slash found -> return full string
+    s
 }

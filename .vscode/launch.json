@@ -10,6 +10,9 @@
             "name": "Debug",
             "program": "deadbeef",
             "args": [],
+            "env": {
+                "RUST_LOG": "none,deadbeef_hotkeys_rust=debug"
+            },
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build and deploy"
         }

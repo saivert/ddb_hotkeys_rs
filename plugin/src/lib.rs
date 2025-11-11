@@ -1,9 +1,10 @@
 use deadbeef_sys::*;
 use once_cell::sync::Lazy;
-use std::{ffi::c_int, ptr::null_mut, sync::Mutex};
-
-#[macro_use]
-mod utils;
+use std::{
+    ffi::{c_char, c_int},
+    ptr::null_mut,
+    sync::Mutex,
+};
 
 mod plugin;
 use plugin::*;
@@ -11,8 +12,8 @@ use plugin::*;
 static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
     let x = DB_hotkeys_plugin_t {
         get_action_for_keycombo: Some(get_action_for_keycombo),
-        get_name_for_keycode: None,
-        reset: None,
+        get_name_for_keycode: Some(get_name_for_keycode),
+        reset: Some(reset),
         misc: DB_misc_t {
             plugin: DB_plugin_t {
                 api_vmajor: 1,
@@ -54,9 +55,17 @@ extern "C" fn get_action_for_keycombo(
     isglobal: i32,
     ctx: *mut u32,
 ) -> *mut DB_plugin_action_t {
-    debug!("ddb_hotkeys_rs::get_action_for_keycombo");
-    if let Ok(p) = &mut PLUGIN.lock() {}
+    tracing::debug!("get_action_for_keycombo {key}, {mods}, {isglobal}, {ctx:?}");
     null_mut()
+}
+
+extern "C" fn get_name_for_keycode(_keycode: i32) -> *const c_char {
+    tracing::debug!("get_name_for_keycode {_keycode}");
+    std::ptr::null_mut()
+}
+
+extern "C" fn reset() {
+    tracing::debug!("reset");
 }
 
 extern "C" fn plugin_start() -> c_int {
