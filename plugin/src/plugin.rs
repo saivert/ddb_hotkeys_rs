@@ -13,11 +13,23 @@ use futures_util::{
 use smol::channel;
 use std::{collections::HashSet, str::FromStr, sync::Arc, thread};
 
+use keysyms::parse_shortcut;
+
 pub struct MiscPlugin {
     plugin: DB_hotkeys_plugin_t,
     thread: Option<PluginThread>,
     shortcut_handler: Arc<Mutex<ShortcutHandler>>,
     abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    commands: Vec<Command>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Command {
+    keycode: i32,
+    modifier: i32,
+    ctx: ddb_action_context_t,
+    isglobal: i32,
+    action: *mut DB_plugin_action_t,
 }
 
 unsafe impl Send for MiscPlugin {}
@@ -82,11 +94,15 @@ impl MiscPlugin {
             thread: None,
             shortcut_handler: Arc::new(Mutex::new(ShortcutHandler::new(abort_registration))),
             abort_handle: Arc::new(Mutex::new(Some(abort_handle))),
+            commands: Vec::new(),
         }
     }
 
     pub fn plugin_start(&mut self) {
         tracing::debug!("plugin start");
+
+        self.read_config();
+
         self.thread = Some(PluginThread::new(self.shortcut_handler.clone()));
         if let Some(s) = self.thread.as_ref() {
             s.msg(ThreadMessage::Start);
@@ -113,6 +129,44 @@ impl MiscPlugin {
                 }
             }
         }
+    }
+
+    fn read_config(&mut self) {
+        for a in DeadBeef::conf_find_str("hotkey.").into_iter().flatten() {
+            if let Some(value) = a.value() {
+                match parse_line(value) {
+                    Ok((keystroke, isglobal, action_name, ctx)) => {
+                        tracing::debug!("keystroke: {keystroke}, isglobal: {isglobal}, action_name: {action_name}, ctx: {ctx}");
+                        if let Some((keycode, modifier)) = parse_shortcut(&keystroke) {
+                            let action = DeadBeef::find_action_by_name(&action_name);
+    
+                            let new_command = Command {
+                                keycode,
+                                modifier,
+                                ctx,
+                                isglobal: isglobal as i32,
+                                action: action.map(|x| x.as_ptr()).unwrap_or(std::ptr::null_mut()),
+                            };
+                            tracing::debug!("new_command: {new_command:?}");
+                            self.commands.push(new_command);
+                        }
+                    }
+                    Err(msg) => tracing::error!("Unable to parse hotkey config item: {msg}"),
+                }
+            }
+        }
+    }
+
+    pub fn get_action_for_keycombo(&mut self,
+        key: i32,
+        mods: i32,
+        isglobal: i32
+    ) -> Option<(ddb_action_context_t, *mut DB_plugin_action_t)> {
+        let act = self.commands.iter().find(|x | {
+            x.isglobal == isglobal && x.keycode == key && x.modifier == mods
+        });
+
+        act.map(|x| (x.ctx, x.action))
     }
 
     // #[allow(unused)]
@@ -148,7 +202,7 @@ impl ShortcutHandler {
         for a in DeadBeef::conf_find_str("hotkey.").into_iter().flatten() {
             if let Some(value) = a.value() {
                 match parse_line(value) {
-                    Ok((keystroke, global, action_name)) => {
+                    Ok((keystroke, global, action_name, _)) => {
                         if !global {
                             // skip non-global bindings for portal registration
                             continue;
@@ -156,8 +210,7 @@ impl ShortcutHandler {
 
                         // Use the action title if available, otherwise fall back to the action name
 
-                        let raw_title = DeadBeef::
-                            find_action_by_name(&action_name)
+                        let raw_title = DeadBeef::find_action_by_name(&action_name)
                             .and_then(|act| act.title().map(|s| s.to_string()))
                             .unwrap_or_else(|| action_name.clone());
 
@@ -382,7 +435,7 @@ fn thread_main(receiver: channel::Receiver<ThreadMessage>, plugin: Arc<Mutex<Sho
 /// Parse lines like: `"Ctrl k" 0 0 toggle_stop_after_album`
 ///
 /// Returns (keystroke, is_global, action_name)
-pub fn parse_line(line: &str) -> Result<(String, bool, String), String> {
+pub fn parse_line(line: &str) -> Result<(String, bool, String, ddb_action_context_t), String> {
     let s = line.trim();
     let rest = s
         .strip_prefix('"')
@@ -396,10 +449,14 @@ pub fn parse_line(line: &str) -> Result<(String, bool, String), String> {
     let after = rest[end_quote_idx + 1..].trim();
     let mut parts = after.split_whitespace();
 
-    // ignore first number
-    let _ = parts
+    // second number -> is_global
+    let num2 = parts
         .next()
-        .ok_or_else(|| "missing first number".to_string())?;
+        .ok_or_else(|| "missing second number".to_string())?;
+    let ctx = match num2.parse::<ddb_action_context_t>() {
+        Ok(n) => n,
+        Err(_) => return Err("second number is not a valid integer".to_string()),
+    };
 
     // second number -> is_global
     let num2 = parts
@@ -416,7 +473,7 @@ pub fn parse_line(line: &str) -> Result<(String, bool, String), String> {
     }
     let action_name = action_tokens.join(" ");
 
-    Ok((keystroke.to_string(), is_global, action_name))
+    Ok((keystroke.to_string(), is_global, action_name, ctx))
 }
 
 #[cfg(test)]
@@ -426,7 +483,7 @@ mod tests {
     #[test]
     fn parses_example_not_global() {
         let line = "\"Ctrl k\" 0 0 toggle_stop_after_album";
-        let (keystroke, is_global, action) = parse_line(line).expect("parse failed");
+        let (keystroke, is_global, action, _) = parse_line(line).expect("parse failed");
         assert_eq!(keystroke, "Ctrl k");
         assert_eq!(is_global, false);
         assert_eq!(action, "toggle_stop_after_album");
@@ -435,7 +492,7 @@ mod tests {
     #[test]
     fn parses_example_global_and_action_with_spaces() {
         let line = "\"Alt+X\" 123 1 do something now";
-        let (keystroke, is_global, action) = parse_line(line).expect("parse failed");
+        let (keystroke, is_global, action, _) = parse_line(line).expect("parse failed");
         assert_eq!(keystroke, "Alt+X");
         assert_eq!(is_global, true);
         assert_eq!(action, "do something now");

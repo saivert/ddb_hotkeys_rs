@@ -2,12 +2,13 @@ use deadbeef_sys::*;
 use once_cell::sync::Lazy;
 use std::{
     ffi::{c_char, c_int},
-    ptr::null_mut,
     sync::Mutex,
 };
 
 mod plugin;
 use plugin::*;
+
+mod keysyms;
 
 static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
     let x = DB_hotkeys_plugin_t {
@@ -22,7 +23,7 @@ static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
                 version_minor: 1,
                 flags: DDB_PLUGIN_FLAG_LOGGING,
                 type_: DB_PLUGIN_MISC as i32,
-                id: c"hotkeys_rs".as_ptr(),
+                id: c"hotkeys".as_ptr(),
                 name: c"Hotkeys plugin using portal".as_ptr(),
                 descr: c"This is a new hotkeys plugin that uses XDG Portal for Global shortcut to support wayland".as_ptr(),
                 copyright: concat!(include_str!("../../LICENSE"), "\0").as_ptr() as *const i8,
@@ -46,22 +47,24 @@ static PLUGIN: Lazy<Mutex<MiscPlugin>> = Lazy::new(|| {
     Mutex::new(MiscPlugin::new(x))
 });
 
-// DB_plugin_action_t *(*get_action_for_keycombo) (int key, int mods, int isglobal, ddb_action_context_t *ctx);
-
-#[allow(unused)]
 extern "C" fn get_action_for_keycombo(
     key: i32,
     mods: i32,
     isglobal: i32,
-    ctx: *mut u32,
+    ctx: *mut ddb_action_context_t,
 ) -> *mut DB_plugin_action_t {
-    tracing::debug!("get_action_for_keycombo {key}, {mods}, {isglobal}, {ctx:?}");
-    null_mut()
+    if let Ok(p) = &mut PLUGIN.lock() {
+        if let Some((context, action_ptr)) = p.get_action_for_keycombo(key, mods, isglobal) {
+            unsafe { *ctx = context }
+            return action_ptr;
+        }
+    }
+    return std::ptr::null_mut();
 }
 
 extern "C" fn get_name_for_keycode(_keycode: i32) -> *const c_char {
     tracing::debug!("get_name_for_keycode {_keycode}");
-    std::ptr::null_mut()
+    return std::ptr::null_mut();
 }
 
 extern "C" fn reset() {
