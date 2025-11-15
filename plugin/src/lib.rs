@@ -5,7 +5,9 @@ use std::{
     sync::Mutex,
 };
 
+mod utils;
 mod plugin;
+mod shortcuthandler;
 use plugin::*;
 
 mod keysyms;
