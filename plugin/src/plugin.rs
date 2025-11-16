@@ -128,13 +128,6 @@ impl MiscPlugin {
 
         act.map(|x| (x.ctx, x.action))
     }
-
-    // #[allow(unused)]
-    // pub fn message(&self, msgid: u32, ctx: usize, p1: u32, p2: u32) {
-    //     match msgid {
-    //         _ => {}
-    //     }
-    // }
 }
 
 fn thread_main(plugin: Arc<Mutex<ShortcutHandler>>) {
@@ -143,20 +136,5 @@ fn thread_main(plugin: Arc<Mutex<ShortcutHandler>>) {
         if !plugin.lock().await.start_session().await.is_ok() {
             tracing::error!("Plugin session failed to start");
         }
-
-        // while let Ok(msg) = receiver.recv().await {
-        //     match msg {
-        //         ThreadMessage::Terminate => {
-        //             tracing::debug!("Plugin thread terminating...");
-        //             plugin.lock().await.stop().await;
-        //         }
-        //         ThreadMessage::Start => {
-        //             tracing::debug!("Plugin thread received Start message");
-        //             if !plugin.lock().await.start_session().await.is_ok() {
-        //                 tracing::debug!("Plugin session failed to start");
-        //             }
-        //         }
-        //     }
-        // }
     });
 }
